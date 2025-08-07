@@ -32,7 +32,7 @@ class RoPE(nn.Module):
         self._compute_rope()
 
     def _compute_rope(self):
-        inv_freq = 1.0 / (self.theta_base ** (torch.arange(0, self.head_dim, 2) / self.head_dim))
+        inv_freq = 1.0 / (self.theta_base ** ((torch.arange(0, self.head_dim, 2).float() / self.head_dim)))
         pos = torch.arange(self.ctx_len)
         angles = einsum(pos, inv_freq, "f,p -> f p") # (ctx_len, head_dim // 2)
         angles = torch.cat((angles, angles), dim=1)
@@ -68,13 +68,10 @@ class MultiHeadAttention(nn.Module):
 
         self.rope = RoPE(self.head_dim, ctx_len)
 
-        # mask = torch.triu(torch.ones(ctx_len, ctx_len), diagonal=1)
-        # self.register_buffer("mask", mask)
-
     def forward(self, x, mask, start_pos=0, cache=None):
         batch_size, seq_len, d_in = x.shape
 
-        queries = self.W_q(x) # (batch_size, seq_len, d_out)
+        queries = self.W_q(x)
         keys = self.W_k(x)
         values = self.W_v(x)
 
@@ -94,9 +91,8 @@ class MultiHeadAttention(nn.Module):
             next_cache = (keys, values)
 
         attn_scores = einsum(queries, keys, "... s1 head_dim, ... s2 head_dim -> ... s1 s2")
-        # attn_scores.masked_fill_(self.mask.bool()[:seq_len,:seq_len], -torch.inf)
         attn_scores.masked_fill_(mask.bool(), -torch.inf)
-        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1], dim=-1)
         context_vecs = einsum(attn_weights, values, "... s1 s2, ... s2 head_dim -> ... s1 head_dim")
         context_vecs = rearrange(context_vecs, "batch_size n_heads seq_len head_dim -> batch_size seq_len (n_heads head_dim)")
         context_vecs = self.out_proj(context_vecs)
@@ -114,9 +110,25 @@ class TransformerBlock(nn.Module):
         residual = x
         x, next_cache = self.mha(self.norm1(x), mask, start_pos=start_pos, cache=cache)
         x += residual
-        # x = x + self.mha(self.norm1(x), mask, start_pos=start_pos, cache=cache)
         x = x + self.ff(self.norm2(x))
         return x, next_cache
+
+class KVCache:
+    def __init__(self, n_layers):
+        self.cache = [None] * n_layers
+    
+    def get(self, layer_idx):
+        return self.cache[layer_idx]
+    
+    def update(self, layer_idx, value):
+        self.cache[layer_idx] = value
+    
+    def get_all(self):
+        return self.cache 
+    
+    def reset(self):
+        for i in range(len(self.cache)):
+            self.cache[i] = None
 
 class Llama2Model(nn.Module):
     def __init__(self, cfg):
