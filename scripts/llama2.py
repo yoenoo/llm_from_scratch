@@ -29,6 +29,7 @@ class RoPE(nn.Module):
         self.head_dim = head_dim
         self.ctx_len = ctx_len
         self.theta_base = theta_base
+        self._compute_rope()
 
     def _compute_rope(self):
         inv_freq = 1.0 / (self.theta_base ** (torch.arange(0, self.head_dim, 2) / self.head_dim))
@@ -49,8 +50,8 @@ class RoPE(nn.Module):
 
     def forward(self, x):
         batch_size, n_heads, seq_len, head_dim = x.shape
-        cos = self.cos[None,None,:seq_len,:seq_len]
-        sin = self.sin[None,None:seq_len,:seq_len]
+        cos = self.cos[None,None,:seq_len,:]
+        sin = self.sin[None,None,:seq_len,:]
         return x * cos + self._rotate_half(x) * sin
 
 class MultiHeadAttention(nn.Module):
@@ -85,7 +86,7 @@ class MultiHeadAttention(nn.Module):
         keys = self.rope(keys)
 
         attn_scores = einsum(queries, keys, "... s1 head_dim, ... s2 head_dim -> ... s1 s2")
-        attn_scores.filled_mask_(self.mask.bool(), -torch.inf)
+        attn_scores.masked_fill_(self.mask.bool()[:seq_len,:seq_len], -torch.inf)
         attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
         context_vecs = einsum(attn_weights, values, "... s1 s2, ... s2 head_dim -> ... s1 head_dim")
         context_vecs = rearrange(context_vecs, "batch_size n_heads seq_len head_dim -> batch_size seq_len (n_heads head_dim)")
